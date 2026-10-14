@@ -9,7 +9,8 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from config.settings import (
     LOG_LEVEL, SCRAPE_INTERVAL_MINUTES, LINKEDIN_KEYWORDS, LINKEDIN_LOCATIONS,
-    DEDUP_TTL_DAYS, LINKEDIN_DELAY_MIN, LINKEDIN_DELAY_MAX, LINKEDIN_MAX_CONCURRENCY
+    DEDUP_TTL_DAYS, LINKEDIN_DELAY_MIN, LINKEDIN_DELAY_MAX, LINKEDIN_MAX_CONCURRENCY,
+    LINKEDIN_KEYWORDS_PER_CYCLE
 )
 from database.repository import JobRepository
 from scraper.linkedin import scrape_linkedin_jobs
@@ -23,6 +24,24 @@ from filters.company_filter import filter_muted_companies
 # Configure Loguru
 logger.remove()
 logger.add(sys.stdout, level=LOG_LEVEL, format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{message}</cyan>")
+
+_linkedin_keyword_offset = 0
+
+def get_linkedin_keywords_for_cycle():
+    """Select the next rotating batch while keeping the full list in use over time."""
+    global _linkedin_keyword_offset
+
+    if not LINKEDIN_KEYWORDS:
+        return []
+
+    batch_size = min(LINKEDIN_KEYWORDS_PER_CYCLE, len(LINKEDIN_KEYWORDS))
+    start = _linkedin_keyword_offset
+    selected = [
+        LINKEDIN_KEYWORDS[(start + index) % len(LINKEDIN_KEYWORDS)]
+        for index in range(batch_size)
+    ]
+    _linkedin_keyword_offset = (start + batch_size) % len(LINKEDIN_KEYWORDS)
+    return selected
 
 async def run_scraper_batch(tasks, semaphore, delay=0.5, cooldown_event=None):
     """Run a batch of scraper coroutines with bounded concurrency and delay."""
@@ -53,7 +72,11 @@ async def run_scraper_batch(tasks, semaphore, delay=0.5, cooldown_event=None):
 async def scrape_and_notify(repo: JobRepository, notifier: TelegramNotifier):
     """Main pipeline execution for a single scrape cycle."""
     cycle_id = uuid.uuid4().hex[:6]
-    logger.info(f"[{cycle_id}] Starting scrape cycle — {len(LINKEDIN_KEYWORDS)} keywords × {len(LINKEDIN_LOCATIONS)} locations")
+    linkedin_keywords = get_linkedin_keywords_for_cycle()
+    logger.info(
+        f"[{cycle_id}] Starting scrape cycle — LinkedIn batch: "
+        f"{len(linkedin_keywords)}/{len(LINKEDIN_KEYWORDS)} keywords × {len(LINKEDIN_LOCATIONS)} locations"
+    )
     
     all_jobs = []
     
@@ -64,7 +87,7 @@ async def scrape_and_notify(repo: JobRepository, notifier: TelegramNotifier):
     linkedin_tasks = []
     cooldown_event = asyncio.Event()  # Shared 429 cooldown across all LinkedIn tasks
     for loc in LINKEDIN_LOCATIONS:
-        for key in LINKEDIN_KEYWORDS:
+        for key in linkedin_keywords:
             linkedin_tasks.append(scrape_linkedin_jobs(keyword=key, location=loc, max_pages=1, cooldown_event=cooldown_event))
     
     delay = random.uniform(LINKEDIN_DELAY_MIN, LINKEDIN_DELAY_MAX)

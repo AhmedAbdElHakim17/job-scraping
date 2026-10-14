@@ -39,6 +39,13 @@ except ValueError:
     LINKEDIN_DELAY_MAX = 6.0
     LINKEDIN_MAX_CONCURRENCY = 2
 
+try:
+    LINKEDIN_KEYWORDS_PER_CYCLE = int(os.getenv("LINKEDIN_KEYWORDS_PER_CYCLE", "5"))
+    if LINKEDIN_KEYWORDS_PER_CYCLE < 1:
+        LINKEDIN_KEYWORDS_PER_CYCLE = 5
+except ValueError:
+    LINKEDIN_KEYWORDS_PER_CYCLE = 5
+
 # Muted / blocked companies — jobs from these will be silently dropped
 # You can override via .env: MUTED_COMPANIES="micro1,Hire Feed,Jobs AI,Hired"
 _muted = os.getenv("MUTED_COMPANIES", "micro1, Hire Feed, Jobs AI, Hired, micro1 AI, Turing, Quik Hire Staffing")
@@ -46,4 +53,3 @@ MUTED_COMPANIES = [c.strip().lower() for c in _muted.split(",") if c.strip()]
 
 # Database Setting
 DB_PATH = "jobs.db"
-

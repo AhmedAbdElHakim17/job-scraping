@@ -51,7 +51,10 @@ Create a `.env` file in the root folder:
 | `TELEGRAM_CHAT_ID`        | Your chat or channel ID. **For channels, you must include the `-100` prefix!**        |
 | `LINKEDIN_KEYWORDS`       | Comma-separated list of job titles (e.g., `frontend, fullstack, react`)               |
 | `LINKEDIN_LOCATIONS`      | Comma-separated list of locations (e.g., `Egypt, Saudi Arabia, United Arab Emirates`) |
+| `LINKEDIN_KEYWORDS_PER_CYCLE` | Number of LinkedIn keywords searched each cycle; the bot rotates through the full list (default: `5`) |
 | `SCRAPE_INTERVAL_MINUTES` | Frequency of the scraping loop in minutes (e.g., `10`)                                |
+
+LinkedIn limits frequent searches, so the bot searches only `LINKEDIN_KEYWORDS_PER_CYCLE` keywords on each cycle and rotates through the configured list. With 27 keywords and the default batch size of 5, it covers the full list over 6 cycles. Other job boards continue using the full keyword list each cycle.
 
 ---
 
