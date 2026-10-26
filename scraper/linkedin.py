@@ -1,4 +1,5 @@
 import asyncio
+import os
 import urllib.parse
 import httpx
 from bs4 import BeautifulSoup
@@ -9,6 +10,11 @@ import random
 from models.job import Job
 from filters.date_filter import is_from_today
 from config.settings import LINKEDIN_KEYWORDS
+
+# How far back to look, in seconds. Must be larger than SCRAPE_INTERVAL + cycle runtime,
+# so one failed/slow cycle doesn't lose jobs. 900 = 15 minutes (good for a 5-minute interval).
+# Override with the env var LINKEDIN_POSTED_WITHIN_SECONDS.
+POSTED_WITHIN_SECONDS = int(os.getenv("LINKEDIN_POSTED_WITHIN_SECONDS", "900"))
 
 # Standard browser headers to avoid basic blocks
 USER_AGENTS = [
@@ -29,7 +35,7 @@ def get_random_headers() -> dict:
 
 async def fetch_jobs_page(client: httpx.AsyncClient, keywords: str, location: str, start: int = 0, retries: int = 5, cooldown_event: asyncio.Event = None) -> str:
     """Hits the LinkedIn Guest Jobs API endpoint with retries on 429.
-    
+
     Args:
         cooldown_event: Optional shared Event. When set, all LinkedIn tasks
                         pause until the cooldown clears — prevents the remaining
@@ -37,11 +43,13 @@ async def fetch_jobs_page(client: httpx.AsyncClient, keywords: str, location: st
     """
     encoded_keywords = urllib.parse.quote(keywords)
     encoded_location = urllib.parse.quote(location)
-    
-    # f_TPR=r86400 filters by past 24 hours
+
+    # f_TPR=r<seconds> limits to jobs posted within that window.
+    # sortBy=DD sorts newest first (default is relevance, which can bury fresh jobs).
     url = (
         f"https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search?"
-        f"keywords={encoded_keywords}&location={encoded_location}&f_TPR=r86400&start={start}"
+        f"keywords={encoded_keywords}&location={encoded_location}"
+        f"&f_TPR=r{POSTED_WITHIN_SECONDS}&sortBy=DD&start={start}"
     )
 
     for attempt in range(retries):
@@ -79,25 +87,33 @@ async def fetch_jobs_page(client: httpx.AsyncClient, keywords: str, location: st
         except Exception as e:
             logger.error(f"Request error scraping LinkedIn: {e}")
             return ""
-            
+
     logger.error(f"Max retries ({retries}) reached for LinkedIn scraping '{keywords}' in '{location}'.")
     return ""
+
+# Title terms that count as a software role even if they don't match a configured keyword.
+# (Removed "qa" and "tester" — add them back here if you want QA roles too.)
+GENERAL_TERMS = [
+    "developer", "programmer", "software", "backend", "back-end", "back end",
+    "frontend", "front-end", "front end", "full stack", "full-stack", "fullstack",
+    "tech lead", "architect", ".net", "dotnet", "c#", "java", "node", "python",
+    "sde", "application engineer", "platform engineer", "api engineer", "web engineer",
+]
 
 def is_title_relevant(title: str) -> bool:
     title_lower = title.lower()
     keywords_lower = [k.lower() for k in LINKEDIN_KEYWORDS]
-    
+
     # Accept if the title contains ANY of our target keywords
     for k in keywords_lower:
         if k in title_lower:
             return True
-            
-    # Also explicitly accept general software terms just to be safe
-    general_terms = [ "developer", "programmer", "software", "backend", "frontend", "full stack", "tech lead", "architect", "qa", "tester"]
-    for t in general_terms:
+
+    # Also accept general software terms
+    for t in GENERAL_TERMS:
         if t in title_lower:
             return True
-            
+
     return False
 
 def parse_jobs(html: str) -> List[Job]:
@@ -115,7 +131,7 @@ def parse_jobs(html: str) -> List[Job]:
             job_div = card.find("div", class_="base-card")
             if not job_div:
                 continue
-            
+
             job_id = job_div.get("data-entity-urn", "").split(":")[-1]
             if not job_id:
                 continue
@@ -172,27 +188,27 @@ async def scrape_linkedin_jobs(keyword: str, location: str, max_pages: int = 1, 
     """
     all_jobs = []
     logger.debug(f"Scraping LinkedIn for '{keyword}' in '{location}'")
-    
+
     async with httpx.AsyncClient() as client:
         for page in range(max_pages):
             start_idx = page * 25 # LinkedIn API returns 25 results per page
             logger.debug(f"Fetching page {page + 1} (start={start_idx})...")
-            
+
             html = await fetch_jobs_page(client, keyword, location, start=start_idx, cooldown_event=cooldown_event)
             if not html.strip():
                 logger.debug("No more HTML returned. Ending pagination.")
                 break
-                
+
             jobs = parse_jobs(html)
             if not jobs:
                 logger.debug("No valid jobs parsed from HTML fragment. Ending pagination.")
                 break
-                
+
             all_jobs.extend(jobs)
-            
+
             # Respectful delay between pages
             if page < max_pages - 1:
                 await asyncio.sleep(random.uniform(2.0, 4.0))
 
-    logger.debug(f"LinkedIn found {len(all_jobs)} today's jobs for '{keyword}'.")
+    logger.debug(f"LinkedIn found {len(all_jobs)} recent jobs for '{keyword}'.")
     return all_jobs
